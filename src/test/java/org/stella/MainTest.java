@@ -7,6 +7,8 @@ import org.junit.jupiter.params.provider.*;
 import static org.junit.jupiter.api.Assertions.*;
 import java.io.*;
 
+import org.stella.typecheck.TypeError;
+
 class MainTest {
 
 
@@ -16,7 +18,10 @@ class MainTest {
             "tests/well-typed/squares.stella",
             "tests/well-typed/higher-order-1.stella",
             "tests/well-typed/increment_twice.stella",
-            "tests/well-typed/logical-operators.stella"})
+            "tests/well-typed/logical-operators.stella",
+            "tests/well-typed/increment-triple.stella",
+            "tests/well-typed/cubes.stella",
+    })
     public void testWellTyped(String filepath) throws IOException, Exception {
         String[] args = new String[0];
         final InputStream original = System.in;
@@ -36,14 +41,20 @@ class MainTest {
             "tests/ill-typed/argument-type-mismatch-3.stella",
             "tests/ill-typed/bad-if-1.stella",
             "tests/ill-typed/bad-if-2.stella",
+            "tests/ill-typed/bad-if-3.stella",
             "tests/ill-typed/bad-succ-1.stella",
             "tests/ill-typed/bad-succ-2.stella",
             "tests/ill-typed/bad-succ-3.stella",
             "tests/ill-typed/shadowed-variable-1.stella",
+            "tests/ill-typed/shadowed-variable-2.stella",
             "tests/ill-typed/undefined-variable-1.stella",
             "tests/ill-typed/undefined-variable-2.stella",
+            "tests/ill-typed/undefined-variable-3.stella",
             "tests/ill-typed/bad-squares-1.stella",
-            "tests/ill-typed/bad-squares-2.stella"})
+            "tests/ill-typed/bad-squares-2.stella",
+            "tests/ill-typed/invalid-nat.stella",
+            }
+            )
     public void testIllTyped(String filepath) throws IOException, Exception {
         String[] args = new String[0];
         final InputStream original = System.in;
@@ -52,8 +63,8 @@ class MainTest {
 
         boolean typecheckerFailed = false;
         try {
-            Main.main(args); // TODO: check that if it fail then there is a type error actually, and not a problem with implementation
-        } catch (Exception e) {
+            Main.main(args);
+        } catch (TypeError e) {
             System.out.println("Type Error: " + e.getMessage());
             typecheckerFailed = true;
         }

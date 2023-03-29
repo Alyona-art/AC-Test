@@ -2,6 +2,11 @@
 
 package org.stella.typecheck;
 
+import org.syntax.stella.Absyn.*;
+import org.syntax.stella.PrettyPrinter;
+
+import java.util.*;
+
 /*** Visitor Design Pattern for TypeCheck. ***/
 
 /* This implements the common visitor design pattern.
@@ -12,6 +17,18 @@ package org.stella.typecheck;
 
 public class VisitTypeCheck
 {
+  /**
+   * idents Map contains all function and variable identifiers and their types.
+   * Types are added to the stack to check exactly the last type for a given ident.
+   * Type is removed from the stack when the program goes beyond where that type was declared.
+   */
+  Map<String, Stack<org.syntax.stella.Absyn.Type>> idents =
+          new HashMap<String, Stack<org.syntax.stella.Absyn.Type>>();
+  /**
+   * Current type of Expression to compare with expected type
+   */
+  Type currentExprType;
+
   public class ProgramVisitor<R,A> implements org.syntax.stella.Absyn.Program.Visitor<R,A>
   {
     public R visit(org.syntax.stella.Absyn.AProgram p, A arg)
@@ -45,23 +62,65 @@ public class VisitTypeCheck
   }
   public class DeclVisitor<R,A> implements org.syntax.stella.Absyn.Decl.Visitor<R,A>
   {
+    /**
+     * In Function Declaration parameters are added to the idents Map,
+     * Return type is compared with type of the Expression inside function.
+     * And in the end all parameters are removed from idents, and function itself is added there.
+     */
     public R visit(org.syntax.stella.Absyn.DeclFun p, A arg)
     { /* Code for DeclFun goes here */
-      System.out.println("Visiting declaration of function " + p.stellaident_);
 
       for (org.syntax.stella.Absyn.Annotation x: p.listannotation_) {
         x.accept(new AnnotationVisitor<R,A>(), arg);
       }
-      //p.stellaident_;
+
       for (org.syntax.stella.Absyn.ParamDecl x: p.listparamdecl_) {
         x.accept(new ParamDeclVisitor<R,A>(), arg);
       }
+
+      // Add parameter to the idents map
+      AParamDecl parameter = (AParamDecl) p.listparamdecl_.getFirst();
+      if  (idents.containsKey(parameter.stellaident_))
+        idents.get(parameter.stellaident_).push(parameter.type_);
+      else {
+        Stack<org.syntax.stella.Absyn.Type> s = new Stack<>();
+        s.push(parameter.type_);
+        idents.put(parameter.stellaident_, s);
+      }
+
       p.returntype_.accept(new ReturnTypeVisitor<R,A>(), arg);
+
+      // Add returnType
+      SomeReturnType returnType = (SomeReturnType)p.returntype_;
+
       p.throwtype_.accept(new ThrowTypeVisitor<R,A>(), arg);
       for (org.syntax.stella.Absyn.Decl x: p.listdecl_) {
         x.accept(new DeclVisitor<R,A>(), arg);
       }
+
       p.expr_.accept(new ExprVisitor<R,A>(), arg);
+
+      // Check if exprType is equal to returnType
+      if (!currentExprType.equals(returnType.type_))
+        checkTypeError(returnType.type_, currentExprType, p.line_num, p.col_num, PrettyPrinter.print(p));
+
+      // remove parameter from the idents map
+      idents.get(parameter.stellaident_).pop();
+      if (idents.get(parameter.stellaident_).empty())
+        idents.remove(parameter.stellaident_);
+
+      // add this function to the idents map
+      ListType listType = new ListType();
+      listType.add(parameter.type_);
+      TypeFun typeFun = new TypeFun(listType, returnType.type_);
+      if  (idents.containsKey(p.stellaident_))
+        idents.get(p.stellaident_).push(typeFun);
+      else {
+        Stack<org.syntax.stella.Absyn.Type> s = new Stack<>();
+        s.push(typeFun);
+        idents.put(p.stellaident_, s);
+      }
+
       return null;
     }
     public R visit(org.syntax.stella.Absyn.DeclTypeAlias p, A arg)
@@ -90,7 +149,6 @@ public class VisitTypeCheck
   {
     public R visit(org.syntax.stella.Absyn.AParamDecl p, A arg)
     { /* Code for AParamDecl goes here */
-      //p.stellaident_;
       p.type_.accept(new TypeVisitor<R,A>(), arg);
       return null;
     }
@@ -123,11 +181,29 @@ public class VisitTypeCheck
   }
   public class ExprVisitor<R,A> implements org.syntax.stella.Absyn.Expr.Visitor<R,A>
   {
+    /**
+     *  If expression checks if expr_1 type is TypeBool,
+     *  and if expr_2 and expr_3 have the same type.
+     */
     public R visit(org.syntax.stella.Absyn.If p, A arg)
     { /* Code for If goes here */
       p.expr_1.accept(new ExprVisitor<R,A>(), arg);
+
+      // Check if expr1Type is TypeBool
+      if (!currentExprType.equals(new TypeBool()))
+        checkTypeError(new TypeBool(), currentExprType, p.line_num, p.col_num, PrettyPrinter.print(p));
+
       p.expr_2.accept(new ExprVisitor<R,A>(), arg);
+
+      // set expr2 type
+      Type expr2Type = currentExprType;
+
       p.expr_3.accept(new ExprVisitor<R,A>(), arg);
+
+      // Check if expr2 and expr3 have the same type
+      if (!currentExprType.equals(expr2Type))
+        checkTypeError(expr2Type, currentExprType, p.line_num, p.col_num, PrettyPrinter.print(p));
+
       return null;
     }
     public R visit(org.syntax.stella.Absyn.Let p, A arg)
@@ -179,12 +255,42 @@ public class VisitTypeCheck
       p.type_.accept(new TypeVisitor<R,A>(), arg);
       return null;
     }
+    /**
+     *  Abstraction adds its parameter to the idents Map,
+     *  create new current expression type - TypeFun,
+     *  including inside parameter type and return type (taken from inner Expression)
+     *  and in the end remove Abstraction parameter from the idents Map.
+     */
     public R visit(org.syntax.stella.Absyn.Abstraction p, A arg)
     { /* Code for Abstraction goes here */
+
       for (org.syntax.stella.Absyn.ParamDecl x: p.listparamdecl_) {
         x.accept(new ParamDeclVisitor<R,A>(), arg);
       }
+
+      // Add parameter to the idents map
+      AParamDecl parameter = (AParamDecl) p.listparamdecl_.getFirst();
+      if  (idents.containsKey(parameter.stellaident_))
+        idents.get(parameter.stellaident_).push(parameter.type_);
+      else {
+        Stack<org.syntax.stella.Absyn.Type> s = new Stack<>();
+        s.push(parameter.type_);
+        idents.put(parameter.stellaident_, s);
+      }
+
       p.expr_.accept(new ExprVisitor<R,A>(), arg);
+
+      // create new current exprType - TypeFun
+      ListType listType = new ListType();
+      listType.add(parameter.type_);
+      TypeFun typeFun = new TypeFun(listType, currentExprType);
+      currentExprType = typeFun;
+
+      // remove parameter from the idents map
+      idents.get(parameter.stellaident_).pop();
+      if (idents.get(parameter.stellaident_).empty())
+        idents.remove(parameter.stellaident_);
+
       return null;
     }
     public R visit(org.syntax.stella.Absyn.Tuple p, A arg)
@@ -246,12 +352,35 @@ public class VisitTypeCheck
       p.expr_2.accept(new ExprVisitor<R,A>(), arg);
       return null;
     }
+    /**
+     *  Application checks if resulting expression type is TypeFun,
+     *  then compares function parameter with given argument
+     *  and create new current expression type function returnType.
+     */
     public R visit(org.syntax.stella.Absyn.Application p, A arg)
     { /* Code for Application goes here */
+
       p.expr_.accept(new ExprVisitor<R,A>(), arg);
+
+      // Check if expr is function
+      if (!(currentExprType instanceof TypeFun))
+        checkTypeError(new TypeFun(null, null), currentExprType, p.line_num, p.col_num, PrettyPrinter.print(p));
+
+      // get paramType and returnType from function
+      Type paramType = ((TypeFun)currentExprType).listtype_.getFirst();
+      Type returnType = ((TypeFun)currentExprType).type_;
+
       for (org.syntax.stella.Absyn.Expr x: p.listexpr_) {
         x.accept(new ExprVisitor<R,A>(), arg);
       }
+
+      // check if argument match parameter
+      if (!currentExprType.equals(paramType))
+        checkTypeError(paramType, currentExprType, p.line_num, p.col_num, PrettyPrinter.print(p));
+
+      // create new current exprType - returnType of the function
+      currentExprType = returnType;
+
       return null;
     }
     public R visit(org.syntax.stella.Absyn.ConsList p, A arg)
@@ -275,9 +404,17 @@ public class VisitTypeCheck
       p.expr_.accept(new ExprVisitor<R,A>(), arg);
       return null;
     }
+    /**
+     * Succ checks if current expression type is TypeNat
+     */
     public R visit(org.syntax.stella.Absyn.Succ p, A arg)
     { /* Code for Succ goes here */
       p.expr_.accept(new ExprVisitor<R,A>(), arg);
+
+      // Check if exprType is TypeNat
+      if (!currentExprType.equals(new TypeNat()))
+        checkTypeError(new TypeNat(), currentExprType, p.line_num, p.col_num, PrettyPrinter.print(p));
+
       return null;
     }
     public R visit(org.syntax.stella.Absyn.LogicNot p, A arg)
@@ -300,11 +437,39 @@ public class VisitTypeCheck
       p.expr_.accept(new ExprVisitor<R,A>(), arg);
       return null;
     }
+    /**
+     *  NatRec checks if expr_1 type is TypeNat,
+     *  if expr_3 type is TypeFun
+     *  and if expr_3 returnType is equal to expr_2 type.
+     *  After that NatRec creates new current expression type - expr_2 type.
+     */
     public R visit(org.syntax.stella.Absyn.NatRec p, A arg)
     { /* Code for NatRec goes here */
+
       p.expr_1.accept(new ExprVisitor<R,A>(), arg);
+
+      // Check if expr1Type is equal to TypeNat
+      if (!currentExprType.equals(new TypeNat()))
+        checkTypeError(new TypeNat(), currentExprType, p.line_num, p.col_num, PrettyPrinter.print(p));
+
       p.expr_2.accept(new ExprVisitor<R,A>(), arg);
+
+      // set default value type
+      Type defaultType = currentExprType;
+
       p.expr_3.accept(new ExprVisitor<R,A>(), arg);
+
+      // Check if expr3 is function
+      if (!(currentExprType instanceof TypeFun))
+        checkTypeError(new TypeFun(null, null), currentExprType, p.line_num, p.col_num, PrettyPrinter.print(p));
+
+      // check if expr3 function return the defaultType
+      Type expr3Type = ((TypeFun)((TypeFun)currentExprType).type_).type_;
+      if (!expr3Type.equals(defaultType))
+        checkTypeError(defaultType, expr3Type, p.line_num, p.col_num, PrettyPrinter.print(p));
+
+      // create new current exprType - defaultType
+      currentExprType = defaultType;
       return null;
     }
     public R visit(org.syntax.stella.Absyn.Fold p, A arg)
@@ -331,22 +496,53 @@ public class VisitTypeCheck
       //p.integer_;
       return null;
     }
+    /**
+     * ConstTrue creates new current expression type - TypeBool
+     */
     public R visit(org.syntax.stella.Absyn.ConstTrue p, A arg)
     { /* Code for ConstTrue goes here */
+
+      // create new current exprType - TypeBool
+      currentExprType = new TypeBool();
+
       return null;
     }
+    /**
+     * ConstFalse creates new current expression type - TypeBool
+     */
     public R visit(org.syntax.stella.Absyn.ConstFalse p, A arg)
     { /* Code for ConstFalse goes here */
+
+      // create new current exprType - TypeBool
+      currentExprType = new TypeBool();
+
       return null;
     }
+    /**
+     * ConstInt creates new current expression type - TypeNat
+     */
     public R visit(org.syntax.stella.Absyn.ConstInt p, A arg)
     { /* Code for ConstInt goes here */
       //p.integer_;
+
+      // create new current exprType - TypeNat
+      currentExprType = new TypeNat();
+
       return null;
     }
+    /**
+     * Var looks for type of the variable in the idents Map,
+     * and throw a TypeError if it doesn't exist.
+     */
     public R visit(org.syntax.stella.Absyn.Var p, A arg)
     { /* Code for Var goes here */
-      //p.stellaident_;
+
+      // try to get identType from the map and create new current exprType from it
+      if  (idents.containsKey(p.stellaident_))
+        currentExprType = idents.get(p.stellaident_).peek();
+      else
+        throw new TypeError("\nundefined variable " + p.stellaident_ + "\n", p.line_num, p.col_num);
+
       return null;
     }
   }
@@ -564,5 +760,31 @@ public class VisitTypeCheck
       p.type_.accept(new TypeVisitor<R,A>(), arg);
       return null;
     }
+  }
+
+  /**
+   * checkTypeError creates a more readable TypeError and throws it
+   */
+  private void checkTypeError(Type expectedType, Type type, int lineNum, int colNum, String where) {
+    Type e = null;
+    Type f = null;
+    if (expectedType instanceof TypeFun && type instanceof TypeFun)
+    {
+      if (!(((TypeFun) expectedType).listtype_.equals(((TypeFun) type).listtype_))) {
+        e = ((TypeFun) expectedType).listtype_.getFirst();
+        f = ((TypeFun) type).listtype_.getFirst();
+      }
+      else if (!(((TypeFun) expectedType).type_.equals(((TypeFun) type).type_))) {
+        e = ((TypeFun) expectedType).type_;
+        f = ((TypeFun) type).type_;
+      }
+    }
+    else {
+      e = expectedType;
+      f = type;
+    }
+      String class1 = e.getClass().toString().substring(e.getClass().toString().lastIndexOf(".")+1);
+      String class2 = f.getClass().toString().substring(f.getClass().toString().lastIndexOf(".")+1);
+      throw new TypeError("\nExpected " + class1 + ", found " + class2 + "\nIn the \n" + where + "\n", lineNum, colNum);
   }
 }
